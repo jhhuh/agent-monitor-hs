@@ -2,7 +2,10 @@
 module AgentMonitor.Parser
   ( parseJsonlLines
   , processEvent
+  , processSubagentContent
   , buildInitialState
+  , loadSubagentFiles
+  , flattenTreeFiltered
   ) where
 
 import Control.Applicative ((<|>))
@@ -10,6 +13,7 @@ import Data.Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
+import Control.Exception (try, SomeException)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -18,6 +22,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
+import System.Directory (doesDirectoryExist, listDirectory)
+import System.FilePath ((</>), dropExtension, takeExtension)
 
 import AgentMonitor.Types
 
@@ -25,22 +31,99 @@ import AgentMonitor.Types
 parseJsonlLines :: BL.ByteString -> [Value]
 parseJsonlLines = mapMaybe decode . BL.split 0x0a
 
--- | Build initial state from all lines in the file
-buildInitialState :: FilePath -> BL.ByteString -> AppState
-buildInitialState fp content =
+-- | Build initial state from main file and optional subagent contents
+buildInitialState :: FilePath -> BL.ByteString -> [(FilePath, BL.ByteString)] -> AppState
+buildInitialState fp content subagentContents =
   let events = parseJsonlLines content
       emptyState = AppState
-        { asAgents       = Map.singleton "main" mkMainAgent
-        , asRootId       = "main"
-        , asSelectedId   = "main"
-        , asFlatOrder    = ["main"]
-        , asFilePath     = fp
-        , asFilePos      = fromIntegral (BL.length content)
-        , asSessionStart = Nothing
-        , asHelpVisible  = False
+        { asAgents         = Map.singleton "main" mkMainAgent
+        , asRootId         = "main"
+        , asSelectedId     = "main"
+        , asFlatOrder      = ["main"]
+        , asFilePath       = fp
+        , asFilePos        = fromIntegral (BL.length content)
+        , asSessionStart   = Nothing
+        , asHelpVisible    = False
+        , asShowCompleted  = False
+        , asFocusedPanel   = AgentTree
+        , asPickerVisible  = False
+        , asPickerMode     = PickerProjects
+        , asPickerItems    = []
+        , asPickerIndex    = 0
+        , asAgentFiles     = Map.singleton "main" fp
         }
+      -- Process main session events first
       st = foldl processEvent emptyState events
-  in st { asFlatOrder = flattenTree (asAgents st) "main" }
+      -- Then discover nesting from subagent files
+      st2 = foldl (\s (sfp, c) -> processSubagentContent s sfp c) st subagentContents
+  in st2 { asFlatOrder = flattenTreeFiltered st2 }
+
+-- | Process incremental subagent content with file path for liveness tracking.
+processSubagentContent :: AppState -> FilePath -> BL.ByteString -> AppState
+processSubagentContent st fp = processSubagentFile fp st
+
+-- | Process a subagent file to discover sub-subagent Task calls.
+-- Subagent files have 'agentId' at the top level (hex string).
+-- We map this back to the tool_use ID in our agent tree, then
+-- scan assistant messages for Task/Skill calls to discover nesting.
+-- Also records the file path in asAgentFiles for liveness checking.
+processSubagentFile :: FilePath -> AppState -> BL.ByteString -> AppState
+processSubagentFile filePath st content =
+  let events = parseJsonlLines content
+      objs = [o | Object o <- events]
+      -- Extract agentId from the first event (all events share the same agentId)
+      fileAgentId = case objs of
+        (o:_) -> lookupText "agentId" o
+        []    -> Nothing
+      -- Map hex agentId to tool_use ID in our tree
+      parentToolUseId = fileAgentId >>= lookupByAgentId (asAgents st)
+  in case parentToolUseId of
+    Nothing -> st  -- Can't map this file to a known agent
+    Just pid ->
+      -- Record agent→file mapping for liveness checking
+      let st' = st { asAgentFiles = Map.insert pid filePath (asAgentFiles st) }
+          -- Scan assistant messages for Task/Skill tool_use calls
+          taskCalls = concatMap extractTaskCallsFromEvent objs
+          timestamp = case objs of
+            (o:_) -> lookupText "timestamp" o >>= iso8601ParseM . T.unpack
+            []    -> Nothing
+      in foldl (spawnSubAgent pid timestamp) st' taskCalls
+
+-- | Find agent by its hex agentId field, returning the tool_use ID key
+lookupByAgentId :: Map AgentId AgentInfo -> Text -> Maybe AgentId
+lookupByAgentId agents hexId =
+  case [aiId ai | ai <- Map.elems agents, aiAgentId ai == Just hexId] of
+    (tid:_) -> Just tid
+    []      -> Nothing
+
+-- | Extract Task/Skill tool_use calls from an assistant event object
+extractTaskCallsFromEvent :: Object -> [(Text, Text)]
+extractTaskCallsFromEvent obj =
+  case lookupText "type" obj of
+    Just "assistant" ->
+      let msg = lookupObject "message" obj
+          content = msg >>= lookupArray "content"
+      in maybe [] extractTaskCalls content
+    _ -> []
+
+-- | Discover and read subagent .jsonl files for a given main session file.
+-- Given "/path/to/<uuid>.jsonl", looks for "/path/to/<uuid>/subagents/agent-*.jsonl"
+-- Returns (filepath, content) pairs for agent→file mapping.
+loadSubagentFiles :: FilePath -> IO [(FilePath, BL.ByteString)]
+loadSubagentFiles fp = do
+  let sessionDir = dropExtension fp
+      subagentDir = sessionDir </> "subagents"
+  exists <- doesDirectoryExist subagentDir
+  if not exists
+    then pure []
+    else do
+      entries <- listDirectory subagentDir
+      let jsonlFiles = map (subagentDir </>)
+                     $ filter (\f -> takeExtension f == ".jsonl") entries
+      result <- try @SomeException $ mapM (\f -> (,) f <$> BL.readFile f) jsonlFiles
+      case result of
+        Left _      -> pure []
+        Right files -> pure files
 
 -- | Process a single JSONL event and update the state
 processEvent :: AppState -> Value -> AppState
@@ -69,13 +152,11 @@ processAssistant st obj timestamp =
       content = msg >>= lookupArray "content"
       stopReason = msg >>= lookupText "stop_reason"
       usage = msg >>= lookupObject "usage"
-      inputTok = maybe 0 (lookupInt "input_tokens") usage
-            + maybe 0 (lookupInt "cache_read_input_tokens") usage
-      outputTok = maybe 0 (lookupInt "output_tokens") usage
+      (inputTok, outputTok) = extractTokens usage
       -- Find Task tool_use calls in content
       taskCalls = maybe [] extractTaskCalls content
-      -- Find text content for last output
-      textContent = maybe "" extractTextContent content
+      -- Find text content parts
+      textParts = maybe [] extractTextParts content
       -- Count tool_use calls
       toolUseCount = maybe 0 countToolUses content
       -- Is this the final message for a subagent?
@@ -87,7 +168,7 @@ processAssistant st obj timestamp =
         , aiToolCalls    = aiToolCalls ai + toolUseCount
         , aiLastTime     = timestamp
         , aiStartTime    = aiStartTime ai <|> timestamp
-        , aiLastOutput   = if T.null textContent then aiLastOutput ai else textContent
+        , aiOutputParts  = boundedAppend 500 (aiOutputParts ai) textParts
         }
       -- If end_turn and this is a subagent, mark completed
       st2 = if isEndTurn && agentId /= "main"
@@ -147,11 +228,9 @@ processAgentProgress st _obj dataObj timestamp agentId =
       st1 = case innerMsgType of
         Just "assistant" ->
           let usage = innerMessage >>= lookupObject "usage"
-              inputTok = maybe 0 (lookupInt "input_tokens") usage
-                    + maybe 0 (lookupInt "cache_read_input_tokens") usage
-              outputTok = maybe 0 (lookupInt "output_tokens") usage
+              (inputTok, outputTok) = extractTokens usage
               content = innerMessage >>= lookupArray "content"
-              textContent = maybe "" extractTextContent content
+              textParts = maybe [] extractTextParts content
               toolUseCount = maybe 0 countToolUses content
               stopReason = innerMessage >>= lookupText "stop_reason"
               taskCalls = maybe [] extractTaskCalls content
@@ -162,7 +241,7 @@ processAgentProgress st _obj dataObj timestamp agentId =
                 , aiToolCalls    = aiToolCalls ai + toolUseCount
                 , aiLastTime     = timestamp
                 , aiStartTime    = aiStartTime ai <|> timestamp
-                , aiLastOutput   = if T.null textContent then aiLastOutput ai else textContent
+                , aiOutputParts  = boundedAppend 500 (aiOutputParts ai) textParts
                 , aiAgentId      = aiAgentId ai <|> dataAgentId
                 }
               s2 = if isEndTurn && null taskCalls
@@ -220,13 +299,9 @@ extractToolResults arr = mapMaybe extractResult (V.toList arr)
         _ -> Nothing
     extractResult _ = Nothing
 
--- | Extract text content from message content array
-extractTextContent :: Array -> Text
-extractTextContent arr =
-  let texts = mapMaybe extractText (V.toList arr)
-  in case texts of
-    [] -> ""
-    _  -> last texts  -- Take the last text block
+-- | Extract all text content parts from message content array
+extractTextParts :: Array -> [Text]
+extractTextParts arr = mapMaybe extractText (V.toList arr)
   where
     extractText (Object o) =
       case lookupText "type" o of
@@ -265,6 +340,30 @@ flattenTree agents root = case Map.lookup root agents of
   Nothing -> [root]
   Just ai -> root : concatMap (flattenTree agents) (aiChildren ai)
 
+-- | Flatten the agent tree, filtering completed agents that have no running descendants.
+-- A completed agent is kept visible if any descendant is still Running.
+flattenTreeFiltered :: AppState -> [AgentId]
+flattenTreeFiltered st
+  | asShowCompleted st = flattenTree (asAgents st) "main"
+  | otherwise = go "main"
+  where
+    agents = asAgents st
+    go aid = case Map.lookup aid agents of
+      Nothing -> [aid]
+      Just ai ->
+        let visibleChildren = filter (isVisible agents) (aiChildren ai)
+        in aid : concatMap go visibleChildren
+    -- An agent is visible if it's not Completed, or if it has running descendants
+    isVisible m aid = case Map.lookup aid m of
+      Nothing -> True
+      Just ai -> aiStatus ai /= Completed || hasRunningDescendant m aid
+    hasRunningDescendant m aid = case Map.lookup aid m of
+      Nothing -> False
+      Just ai -> any (isRunningOrHasRunning m) (aiChildren ai)
+    isRunningOrHasRunning m cid = case Map.lookup cid m of
+      Nothing -> False
+      Just ci -> aiStatus ci == Running || hasRunningDescendant m cid
+
 -- | Update session start time if not yet set
 maybeUpdateSessionStart :: AppState -> Maybe UTCTime -> AppState
 maybeUpdateSessionStart st Nothing  = st
@@ -288,9 +387,26 @@ lookupArray key obj = case KM.lookup (Key.fromText key) obj of
   Just (Array a) -> Just a
   _              -> Nothing
 
+-- | Extract input and output token counts from a usage object.
+extractTokens :: Maybe Object -> (Int, Int)
+extractTokens Nothing = (0, 0)
+extractTokens (Just usage) =
+  let inp = lookupInt "input_tokens" usage
+          + lookupInt "cache_read_input_tokens" usage
+          + lookupInt "cache_creation_input_tokens" usage
+      out = lookupInt "output_tokens" usage
+  in (inp, out)
+
 -- Helper: lookup an int field
 lookupInt :: Text -> Object -> Int
 lookupInt key obj = case KM.lookup (Key.fromText key) obj of
   Just (Number n) -> round n
   _               -> 0
+
+-- | Append new items to a list, keeping at most maxLen items (drop oldest).
+boundedAppend :: Int -> [a] -> [a] -> [a]
+boundedAppend maxLen existing new =
+  let combined = existing ++ new
+      excess = length combined - maxLen
+  in if excess > 0 then drop excess combined else combined
 

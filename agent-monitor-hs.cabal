@@ -9,6 +9,7 @@ library
   exposed-modules:
       AgentMonitor.Types
     , AgentMonitor.Parser
+    , AgentMonitor.ProcChecker
     , AgentMonitor.Watcher
     , AgentMonitor.UI
   hs-source-dirs:   src
@@ -18,10 +19,11 @@ library
     , brick >= 2.1
     , bytestring
     , containers
-    , directory
+    , directory >= 1.3.6
     , filepath
     , text
     , time
+    , unix
     , vector
     , vty >= 6.0
     , vty-crossplatform
@@ -35,5 +37,7 @@ executable agent-monitor-hs
       base >= 4.14 && < 5
     , agent-monitor-hs
     , bytestring
+    , containers
+    , text
   default-language: GHC2021
   ghc-options:      -threaded -rtsopts -with-rtsopts=-N

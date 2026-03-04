@@ -16,6 +16,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
@@ -27,7 +28,7 @@ newtype ProcChecker = ProcChecker (IORef ProcState)
 
 data ProcState = ProcState
   { psClaudePids :: Set String   -- cached PIDs as strings (for /proc path construction)
-  , psLastScanNs :: Word         -- monotonic nanoseconds of last tree scan
+  , psLastScanNs :: Word64       -- monotonic nanoseconds of last tree scan
   }
 
 -- | Create a new ProcChecker with empty cache.
@@ -125,7 +126,10 @@ checkCmdline pid = do
     pure content
   case result of
     Left _  -> pure False
-    Right c -> pure (BS.isInfixOf "claude" c)
+    Right c -> pure (claudeBytes `BS.isInfixOf` c)
+  where
+    -- "claude" as raw bytes: [99,108,97,117,100,101]
+    claudeBytes = BS.pack [99,108,97,117,100,101]
 
 -- | Read PPID from /proc/<pid>/stat.
 -- Format: "pid (comm) state ppid ..."

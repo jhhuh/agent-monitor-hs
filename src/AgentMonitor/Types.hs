@@ -28,25 +28,38 @@ data AgentInfo = AgentInfo
   , aiToolCalls   :: Int
   , aiStartTime   :: Maybe UTCTime
   , aiLastTime    :: Maybe UTCTime
-  , aiLastOutput  :: Text             -- Last text output from assistant
+  , aiOutputParts :: [Text]           -- All text output blocks (accumulated)
   , aiAgentId     :: Maybe Text       -- The agentId field from JSONL (hex string)
   } deriving (Show)
 
 -- | The full application state
 data AppState = AppState
-  { asAgents       :: Map AgentId AgentInfo
-  , asRootId       :: AgentId              -- Always "main"
-  , asSelectedId   :: AgentId              -- Currently selected agent
-  , asFlatOrder    :: [AgentId]            -- Flattened tree order for navigation
-  , asFilePath     :: FilePath
-  , asFilePos      :: Int                  -- Byte offset for tailing
-  , asSessionStart :: Maybe UTCTime
-  , asHelpVisible  :: Bool                 -- Help overlay toggled by '?'
+  { asAgents         :: Map AgentId AgentInfo
+  , asRootId         :: AgentId              -- Always "main"
+  , asSelectedId     :: AgentId              -- Currently selected agent
+  , asFlatOrder      :: [AgentId]            -- Flattened tree order for navigation
+  , asFilePath       :: FilePath
+  , asFilePos        :: Int                  -- Byte offset for tailing
+  , asSessionStart   :: Maybe UTCTime
+  , asHelpVisible    :: Bool                 -- Help overlay toggled by '?'
+  , asShowCompleted  :: Bool                 -- Show completed agents in tree?
+  , asFocusedPanel   :: ResourceName         -- Which panel has focus (AgentTree or DetailPanel)
+  , asPickerVisible  :: Bool                 -- Project picker overlay
+  , asPickerMode     :: PickerMode           -- Which level of picker
+  , asPickerItems    :: [(String, FilePath)]  -- (display label, path) for current level
+  , asPickerIndex    :: Int                  -- Selected index in picker
+  , asAgentFiles     :: Map AgentId FilePath  -- agent → its .jsonl file path
   } deriving (Show)
+
+-- | Picker navigation mode
+data PickerMode
+  = PickerProjects   -- Showing project list
+  | PickerSessions   -- Showing sessions within a project
+  deriving (Eq, Show)
 
 -- | Custom events for brick
 data CustomEvent
-  = FileUpdated    -- New lines available
+  = FileUpdated    -- New lines available in main or subagent files
   | Tick           -- Periodic refresh
   deriving (Show)
 
@@ -54,6 +67,7 @@ data CustomEvent
 data ResourceName
   = AgentTree
   | DetailPanel
+  | DetailViewport
   deriving (Eq, Ord, Show)
 
 -- | Create a fresh main agent
@@ -69,7 +83,7 @@ mkMainAgent = AgentInfo
   , aiToolCalls    = 0
   , aiStartTime    = Nothing
   , aiLastTime     = Nothing
-  , aiLastOutput   = ""
+  , aiOutputParts  = []
   , aiAgentId      = Nothing
   }
 
@@ -86,6 +100,6 @@ mkSubAgent agentId parentId desc startTime = AgentInfo
   , aiToolCalls    = 0
   , aiStartTime    = startTime
   , aiLastTime     = startTime
-  , aiLastOutput   = ""
+  , aiOutputParts  = []
   , aiAgentId      = Nothing
   }
