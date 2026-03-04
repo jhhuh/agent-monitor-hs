@@ -49,28 +49,47 @@ readNewLines fp posRef = do
   writeIORef posRef newPos
   pure (BL.fromStrict content)
 
--- | Find the newest .jsonl file across all Claude project directories
+-- | Find the newest .jsonl file, preferring the current project directory.
+-- Claude Code encodes project paths by replacing @/@  with @-@, e.g.
+-- @\/home\/user\/myproject@ → @-home-user-myproject@ under @~\/.claude\/projects\/@.
 findNewestJsonl :: IO (Maybe FilePath)
 findNewestJsonl = do
   home <- getHomeDirectory
+  cwd <- getCurrentDirectory
   let claudeDir = home </> ".claude" </> "projects"
+      projectDirName = map (\c -> if c == '/' then '-' else c) cwd
+      currentProjectDir = claudeDir </> projectDirName
   exists <- doesDirectoryExist claudeDir
   if not exists
     then pure Nothing
     else do
-      projectDirs <- listDirectoryAbs claudeDir
-      dirs <- myFilterM doesDirectoryExist projectDirs
-      jsonlFiles <- concat <$> mapM findJsonlInDir dirs
-      if null jsonlFiles
-        then pure Nothing
-        else do
-          withTimes <- mapM (\f -> do
-            t <- getModificationTime f
-            pure (f, t)) jsonlFiles
-          let sorted = sortOn (Down . snd) withTimes
-          case sorted of
-            []        -> pure Nothing
-            ((f,_):_) -> pure (Just f)
+      -- Try current project first, then fall back to all projects
+      currentResult <- do
+        dirExists <- doesDirectoryExist currentProjectDir
+        if dirExists
+          then newestJsonlIn [currentProjectDir]
+          else pure Nothing
+      case currentResult of
+        Just _  -> pure currentResult
+        Nothing -> do
+          projectDirs <- listDirectoryAbs claudeDir
+          dirs <- myFilterM doesDirectoryExist projectDirs
+          newestJsonlIn dirs
+
+-- | Find the newest .jsonl file across the given directories
+newestJsonlIn :: [FilePath] -> IO (Maybe FilePath)
+newestJsonlIn dirs = do
+  jsonlFiles <- concat <$> mapM findJsonlInDir dirs
+  if null jsonlFiles
+    then pure Nothing
+    else do
+      withTimes <- mapM (\f -> do
+        t <- getModificationTime f
+        pure (f, t)) jsonlFiles
+      let sorted = sortOn (Down . snd) withTimes
+      case sorted of
+        []        -> pure Nothing
+        ((f,_):_) -> pure (Just f)
 
 -- | List directory contents with absolute paths
 listDirectoryAbs :: FilePath -> IO [FilePath]
