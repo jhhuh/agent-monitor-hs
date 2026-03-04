@@ -35,6 +35,7 @@ cabal build
 |-----|--------|
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
+| `?` | Show help overlay |
 | `q` / `Esc` | Quit |
 
 ## Dependencies

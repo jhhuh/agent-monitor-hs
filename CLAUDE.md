@@ -27,7 +27,7 @@ TUI dashboard for monitoring Claude Code subagent hierarchy in real-time. Built 
 - **`src/AgentMonitor/Types.hs`** — Core types: `AgentInfo`, `AppState`, `AgentStatus`, brick event/resource types.
 - **`src/AgentMonitor/Parser.hs`** — JSONL event processing. The core logic lives here.
 - **`src/AgentMonitor/Watcher.hs`** — File tailing via polling (500ms `threadDelay`). Uses `IORef Int` for byte offset tracking.
-- **`src/AgentMonitor/UI.hs`** — Brick TUI: tree view (40% left), detail panel (60% right), status bar.
+- **`src/AgentMonitor/UI.hs`** — Brick TUI: tree view (40% left), detail panel (60% right), status bar, `?` help overlay.
 
 ### Data Flow
 
