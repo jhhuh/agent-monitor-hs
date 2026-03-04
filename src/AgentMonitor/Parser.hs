@@ -1,9 +1,11 @@
+{-# LANGUAGE OverloadedStrings #-}
 module AgentMonitor.Parser
   ( parseJsonlLines
   , processEvent
   , buildInitialState
   ) where
 
+import Control.Applicative ((<|>))
 import Data.Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
@@ -291,7 +293,3 @@ lookupInt key obj = case KM.lookup (Key.fromText key) obj of
   Just (Number n) -> round n
   _               -> 0
 
--- Applicative alternative for Maybe
-(<|>) :: Maybe a -> Maybe a -> Maybe a
-(<|>) (Just x) _ = Just x
-(<|>) Nothing  y = y

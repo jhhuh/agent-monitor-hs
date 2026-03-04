@@ -1,17 +1,19 @@
+{-# LANGUAGE OverloadedStrings #-}
 module AgentMonitor.UI
   ( runApp
   ) where
 
 import Brick
-import Brick.BChan (BChan, newBChan)
+import Brick.BChan (newBChan)
 import Brick.Widgets.Border
 import Brick.Widgets.Border.Style (unicode)
+import Control.Monad.IO.Class (liftIO)
+import Data.Function ((&))
 import Data.IORef (IORef)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime, NominalDiffTime, diffUTCTime, getCurrentTime)
+import Data.Time (UTCTime, NominalDiffTime, diffUTCTime)
 import Graphics.Vty qualified as Vty
 import Graphics.Vty.CrossPlatform (mkVty)
 
@@ -61,35 +63,44 @@ drawUI st = [ui]
 
 -- | Draw the agent tree
 drawTree :: AppState -> Widget ResourceName
-drawTree st = vBox $ map (drawTreeNode st 0) rootChildren
-  where
-    -- Draw main and its children
-    rootChildren = case Map.lookup "main" (asAgents st) of
-      Nothing -> []
-      Just ai -> "main" : aiChildren ai
-    drawTreeNode :: AppState -> Int -> AgentId -> Widget ResourceName
-    drawTreeNode s depth aid =
-      case Map.lookup aid (asAgents s) of
-        Nothing -> emptyWidget
-        Just ai ->
-          let indent = str (replicate (depth * 2) ' ')
-              prefix = if null (aiChildren ai)
-                       then str "  "
-                       else str (if aid == "main" then "▼ " else "├─")
-              icon = statusIcon (aiStatus ai)
-              label = txt (truncateText 30 (aiDescription ai))
-              isSelected = asSelectedId s == aid
-              baseWidget = indent <+> prefix <+> icon <+> str " " <+> label
-              widget = if isSelected
-                       then withAttr selectedAttr baseWidget
-                       else baseWidget
-              children = case Map.lookup aid (asAgents s) of
-                Nothing  -> []
-                Just ai' -> aiChildren ai'
-              childWidgets = map (drawTreeNode s (depth + 1)) children
-          in if aid == "main"
-             then vBox (widget : childWidgets)
-             else vBox (widget : childWidgets)
+drawTree st = case Map.lookup "main" (asAgents st) of
+  Nothing -> str "(empty)"
+  Just mainAi ->
+    let mainWidget = drawNodeLine st "main" mainAi ""
+        children = aiChildren mainAi
+        childWidgets = drawChildren st children "  "
+    in vBox (mainWidget : childWidgets)
+
+-- | Draw a list of sibling children with proper tree connectors
+drawChildren :: AppState -> [AgentId] -> String -> [Widget ResourceName]
+drawChildren _ [] _ = []
+drawChildren st [aid] pfx =
+  -- Last child uses └── connector
+  case Map.lookup aid (asAgents st) of
+    Nothing -> []
+    Just ai ->
+      let line = drawNodeLine st aid ai (pfx ++ "└─")
+          grandChildren = drawChildren st (aiChildren ai) (pfx ++ "  ")
+      in line : grandChildren
+drawChildren st (aid:rest) pfx =
+  -- Non-last child uses ├── connector
+  case Map.lookup aid (asAgents st) of
+    Nothing -> drawChildren st rest pfx
+    Just ai ->
+      let line = drawNodeLine st aid ai (pfx ++ "├─")
+          grandChildren = drawChildren st (aiChildren ai) (pfx ++ "│ ")
+      in line : grandChildren ++ drawChildren st rest pfx
+
+-- | Draw a single tree node line
+drawNodeLine :: AppState -> AgentId -> AgentInfo -> String -> Widget ResourceName
+drawNodeLine st aid ai pfx =
+  let icon = statusIcon (aiStatus ai)
+      label = txt (truncateText 30 (aiDescription ai))
+      isSelected = asSelectedId st == aid
+      baseWidget = str pfx <+> icon <+> str " " <+> label
+  in if isSelected
+     then visible $ withAttr selectedAttr baseWidget
+     else baseWidget
 
 -- | Draw the detail panel for the selected agent
 drawDetail :: AppState -> Widget ResourceName
@@ -253,6 +264,3 @@ labeledField :: Text -> Text -> Widget n
 labeledField label value =
   withAttr labelAttr (txt (label <> ": ")) <+> txt value
 
--- | Flip function application
-(&) :: a -> (a -> b) -> b
-(&) = flip ($)

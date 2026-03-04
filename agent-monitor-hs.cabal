@@ -5,17 +5,7 @@ synopsis:           TUI dashboard for Claude Code subagent hierarchy
 license:            MIT
 build-type:         Simple
 
-executable agent-monitor-hs
-  main-is:          Main.hs
-  hs-source-dirs:   app
-  other-modules:
-  build-depends:
-      base >= 4.14 && < 5
-    , agent-monitor-hs-lib
-  default-language: GHC2021
-  ghc-options:      -threaded -rtsopts -with-rtsopts=-N
-
-library agent-monitor-hs-lib
+library
   exposed-modules:
       AgentMonitor.Types
     , AgentMonitor.Parser
@@ -37,3 +27,13 @@ library agent-monitor-hs-lib
     , vty-crossplatform
   default-language: GHC2021
   ghc-options:      -Wall
+
+executable agent-monitor-hs
+  main-is:          Main.hs
+  hs-source-dirs:   app
+  build-depends:
+      base >= 4.14 && < 5
+    , agent-monitor-hs
+    , bytestring
+  default-language: GHC2021
+  ghc-options:      -threaded -rtsopts -with-rtsopts=-N

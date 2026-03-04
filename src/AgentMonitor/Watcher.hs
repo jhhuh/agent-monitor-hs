@@ -8,6 +8,7 @@ import Brick.BChan (BChan, writeBChan)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (try, SomeException)
 import Control.Monad (forever, when, void)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.IORef
 import Data.List (sortOn)
@@ -43,12 +44,10 @@ readNewLines fp posRef = do
   pos <- readIORef posRef
   h <- openBinaryFile fp ReadMode
   hSeek h AbsoluteSeek (fromIntegral pos)
-  content <- BL.hGetContents h
-  let newPos = pos + fromIntegral (BL.length content)
-  -- Force the content so the handle can be closed
-  _ <- pure $! BL.length content
+  content <- BS.hGetContents h  -- strict read, closes handle
+  let newPos = pos + BS.length content
   writeIORef posRef newPos
-  pure content
+  pure (BL.fromStrict content)
 
 -- | Find the newest .jsonl file across all Claude project directories
 findNewestJsonl :: IO (Maybe FilePath)
@@ -69,7 +68,9 @@ findNewestJsonl = do
             t <- getModificationTime f
             pure (f, t)) jsonlFiles
           let sorted = sortOn (Down . snd) withTimes
-          pure $ Just $ fst $ head sorted
+          case sorted of
+            []        -> pure Nothing
+            ((f,_):_) -> pure (Just f)
 
 -- | List directory contents with absolute paths
 listDirectoryAbs :: FilePath -> IO [FilePath]

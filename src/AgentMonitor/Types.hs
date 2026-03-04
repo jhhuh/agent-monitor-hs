@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module AgentMonitor.Types where
 
 import Data.Map.Strict (Map)
