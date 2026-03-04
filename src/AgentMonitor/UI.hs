@@ -7,6 +7,7 @@ import Brick
 import Brick.BChan (newBChan)
 import Brick.Widgets.Border
 import Brick.Widgets.Border.Style (unicode)
+import Brick.Widgets.Center (centerLayer, hCenter)
 import Control.Monad.IO.Class (liftIO)
 import Data.Function ((&))
 import Data.IORef (IORef)
@@ -42,24 +43,39 @@ app posRef = App
 
 -- | Draw the UI
 drawUI :: AppState -> [Widget ResourceName]
-drawUI st = [ui]
-  where
-    ui = withBorderStyle unicode $
-      vBox
-        [ hBox
-            [ borderWithLabel (str " Agent Tree ") $
-                hLimitPercent 40 $
-                padRight Max $
-                viewport AgentTree Vertical $
-                drawTree st
-            , borderWithLabel (str " Detail Panel ") $
-                padRight Max $
-                padBottom Max $
-                drawDetail st
-            ]
-        , hBorder
-        , drawStatusBar st
-        ]
+drawUI st =
+  let base = withBorderStyle unicode $
+        vBox
+          [ hBox
+              [ borderWithLabel (str " Agent Tree ") $
+                  hLimitPercent 40 $
+                  padRight Max $
+                  viewport AgentTree Vertical $
+                  drawTree st
+              , borderWithLabel (str " Detail Panel ") $
+                  padRight Max $
+                  padBottom Max $
+                  drawDetail st
+              ]
+          , hBorder
+          , drawStatusBar st
+          ]
+  in if asHelpVisible st
+     then [centerLayer helpWidget, base]
+     else [base]
+
+-- | Help overlay widget listing all keybindings
+helpWidget :: Widget ResourceName
+helpWidget =
+  withBorderStyle unicode $
+    borderWithLabel (str " Help ") $
+      padLeftRight 2 $ padTopBottom 1 $
+        hCenter $ vBox
+          [ str "j / Down    Move selection down"
+          , str "k / Up      Move selection up"
+          , str "?           Toggle this help"
+          , str "q / Esc     Quit"
+          ]
 
 -- | Draw the agent tree
 drawTree :: AppState -> Widget ResourceName
@@ -140,15 +156,23 @@ drawStatusBar st =
 
 -- | Handle events
 handleEvent :: IORef Int -> BrickEvent ResourceName CustomEvent -> EventM ResourceName AppState ()
-handleEvent posRef ev = case ev of
-  VtyEvent (Vty.EvKey Vty.KEsc [])        -> halt
-  VtyEvent (Vty.EvKey (Vty.KChar 'q') []) -> halt
-  VtyEvent (Vty.EvKey Vty.KUp [])         -> modify moveUp
-  VtyEvent (Vty.EvKey (Vty.KChar 'k') []) -> modify moveUp
-  VtyEvent (Vty.EvKey Vty.KDown [])       -> modify moveDown
-  VtyEvent (Vty.EvKey (Vty.KChar 'j') []) -> modify moveDown
-  AppEvent FileUpdated                     -> handleFileUpdate posRef
-  _                                        -> pure ()
+handleEvent posRef ev = do
+  st <- get
+  if asHelpVisible st
+    then case ev of
+      VtyEvent (Vty.EvKey _ _) -> modify $ \s -> s { asHelpVisible = False }
+      AppEvent FileUpdated     -> handleFileUpdate posRef
+      _                        -> pure ()
+    else case ev of
+      VtyEvent (Vty.EvKey Vty.KEsc [])        -> halt
+      VtyEvent (Vty.EvKey (Vty.KChar 'q') []) -> halt
+      VtyEvent (Vty.EvKey (Vty.KChar '?') []) -> modify $ \s -> s { asHelpVisible = True }
+      VtyEvent (Vty.EvKey Vty.KUp [])         -> modify moveUp
+      VtyEvent (Vty.EvKey (Vty.KChar 'k') []) -> modify moveUp
+      VtyEvent (Vty.EvKey Vty.KDown [])       -> modify moveDown
+      VtyEvent (Vty.EvKey (Vty.KChar 'j') []) -> modify moveDown
+      AppEvent FileUpdated                     -> handleFileUpdate posRef
+      _                                        -> pure ()
 
 -- | Handle file update: read new lines and process them
 handleFileUpdate :: IORef Int -> EventM ResourceName AppState ()

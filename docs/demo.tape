@@ -18,21 +18,53 @@ Type "agent-monitor-hs docs/sample-session.jsonl"
 Enter
 Sleep 2s
 
-# Navigate down through agents
+# Navigate down through the tree
 Down
-Sleep 1s
+Sleep 800ms
 Down
-Sleep 1s
+Sleep 800ms
 Down
-Sleep 1s
+Sleep 800ms
 Down
-Sleep 1s
+Sleep 800ms
+Down
+Sleep 800ms
+Down
+Sleep 800ms
+Down
+Sleep 800ms
+Down
+Sleep 800ms
+Down
+Sleep 800ms
 
-# Navigate back up
+# Back up to top
 Up
-Sleep 1s
+Sleep 500ms
+Up
+Sleep 500ms
+Up
+Sleep 500ms
+Up
+Sleep 500ms
+Up
+Sleep 500ms
+Up
+Sleep 500ms
+Up
+Sleep 500ms
+Up
+Sleep 500ms
 Up
 Sleep 1.5s
+
+# Show help overlay
+Type "?"
+Sleep 2s
+
+# Dismiss help
+Type " "
+Sleep 1s
 
 # Quit
 Type "q"

@@ -37,6 +37,7 @@ buildInitialState fp content =
         , asFilePath     = fp
         , asFilePos      = fromIntegral (BL.length content)
         , asSessionStart = Nothing
+        , asHelpVisible  = False
         }
       st = foldl processEvent emptyState events
   in st { asFlatOrder = flattenTree (asAgents st) "main" }

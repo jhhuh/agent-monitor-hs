@@ -41,6 +41,7 @@ data AppState = AppState
   , asFilePath     :: FilePath
   , asFilePos      :: Int                  -- Byte offset for tailing
   , asSessionStart :: Maybe UTCTime
+  , asHelpVisible  :: Bool                 -- Help overlay toggled by '?'
   } deriving (Show)
 
 -- | Custom events for brick
